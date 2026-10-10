@@ -1,0 +1,73 @@
+name: kilat
+
+# --- Template bersama untuk semua service Go ---
+# Service Go baru cukup menulis `<<: *go-service` dan `build: { <<: *go-build, args: { SERVICE: <nama> } }`,
+# aturan watch & depends_on otomatis ikut. Path relatif terhadap folder file ini (deploy/).
+x-go-build: &go-build
+  context: ..
+  dockerfile: Dockerfile
+
+x-go-service: &go-service
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  # Dipakai oleh `make watch`: build ulang & restart otomatis saat file berubah.
+  develop:
+    watch:
+      - path: ../services
+        action: rebuild
+        ignore:
+          - "**/*_test.go"
+      - path: ../pkg
+        action: rebuild
+      - path: ../go.mod
+        action: rebuild
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kilat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kilat}
+      POSTGRES_DB: ${POSTGRES_DB:-kilat}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  product:
+    <<: *go-service
+    build:
+      <<: *go-build
+      args:
+        SERVICE: product
+    environment:
+      PRODUCT_HTTP_ADDR: ":8081"
+      DATABASE_URL: postgres://${POSTGRES_USER:-kilat}:${POSTGRES_PASSWORD:-kilat}@postgres:5432/${POSTGRES_DB:-kilat}?sslmode=disable
+      REDIS_ADDR: redis:6379
+    ports:
+      - "${PRODUCT_PORT:-8081}:8081"
+
+volumes:
+  pgdata:
+  redisdata:
